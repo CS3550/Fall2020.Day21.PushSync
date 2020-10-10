@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset='utf-8'>
+    <meta http-equiv='X-UA-Compatible' content='IE=edge'>
+    <title>Event Handling</title>
+    <meta name='viewport' content='width=device-width, initial-scale=1'>
+    <style>
+        body {
+            margin-top: 2rem;
+        }
+
+        button {
+            font-family: monospace;
+            font-size: 3rem;
+        }
+
+        .text-area-container {
+            text-align: center;
+            margin: 1rem;
+        }
+
+        .undo-redo-container {
+            text-align: center;
+            margin: 1rem;
+        }
+
+        table {
+            margin: 0 auto;
+        }
+    </style>
+</head>
+
+<body>
+    <div>
+        <div class="undo-redo-container">
+            <button onclick="undo()" id="undo">Undo</button>
+            <button onclick="redo()" id="redo">Redo</button>
+        </div>
+
+        <table>
+            <tr>
+                <td><button id="0" onclick="clicker(0)"></button></td>
+                <td><button id="1" onclick="clicker(1)"></button></td>
+                <td><button id="2" onclick="clicker(2)"></button></td>
+            </tr>
+            <tr>
+                <td><button id="3" onclick="clicker(3)"></button></td>
+                <td><button id="4" onclick="clicker(4)"></button></td>
+                <td><button id="5" onclick="clicker(5)"></button></td>
+            </tr>
+            <tr>
+                <td><button id="6" onclick="clicker(6)"></button></td>
+                <td><button id="7" onclick="clicker(7)"></button></td>
+                <td><button id="8" onclick="clicker(8)"></button></td>
+            </tr>
+        </table>
+
+        <div class="text-area-container">
+            <textarea id="log" rows=15 cols=50></textarea>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/2.0.3/socket.io.js"></script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/0.20.0/axios.min.js"
+        integrity="sha512-quHCp3WbBNkwLfYUMd+KwBAgpVukJu5MncuQaWXgCrfgcxCJAq/fo+oqrRKOj+UKEmyMCG3tb8RB63W+EmrOBg=="
+        crossorigin="anonymous"></script>
+    <script>
+
+        //The tic tac toe model
+
+        let X = "X";
+        let O = "O";
+        let BLANK = "&nbsp;";
+        let BOARD_FULL = "BOARD FULL";
+
+        class Model {
+            constructor() {
+                this.model = []
+                for (let i = 0; i < 9; i++) {
+                    this.model[i] = BLANK;
+                }
+            }
+            getTurn() {
+                let countX = this.model.reduce((a, b) => b == X ? a + 1 : a, 0)
+                let countO = this.model.reduce((a, b) => b == O ? a + 1 : a, 0)
+
+                if (countX + countO == 9) return BOARD_FULL;
+                return countX == countO ? X : O;
+            }
+        }
+
+        //Command Object
+        class ClickCommand {
+            constructor(model, index, value) {
+                if (!model) return;
+                [this.model, this.index, this.value] = [model, index, value];
+                this.originalValue = model.model[index];
+            }
+            do() {
+                this.model.model[this.index] = this.value;
+            }
+            doString() {
+                return `Set the value of ${this.index} to ${this.value}.`;
+            }
+            undo() {
+                this.model.model[this.index] = this.originalValue;
+            }
+            undoString() {
+                return `Set the value of ${this.index} to ${this.originalValue}.`;
+            }
+        }
+
+
+        //Undo and redo functionality
+        let DO = "DO";
+        let UNDO = "UNDO";
+        let REDO = "REDO";
+
+        let undoStack = [];
+        let redoStack = [];
+
+        //Simple helper functions
+        function pop(arr) {
+            return arr.splice(arr.length - 1, 1)[0];
+        }
+        function last(arr) {
+            return arr[arr.length - 1];
+        }
+        function isEmpty(arr) {
+            return arr.length == 0;
+        }
+
+        function undo() {
+            if (isEmpty(undoStack)) return;
+            let command = pop(undoStack);
+            command.undo();
+            let string = command.undoString();
+            redoStack.push(command);
+            handleEvent("undoRedo", null, UNDO, string);
+            handleEvent(command.constructor.name, command, UNDO, string);
+        }
+
+        function redo() {
+            if (isEmpty(redoStack.length)) return;
+            let command = pop(redoStack);
+            command.do();
+            let string = command.doString();
+            undoStack.push(command);
+            handleEvent("undoRedo", null, REDO, string);
+            handleEvent(command.constructor.name, command, REDO, string);
+        }
+
+        function doCommand(command) {
+            command.do();
+            let string = command.doString();
+            undoStack.push(command);
+            redoStack = [];
+            handleEvent("undoRedo", null, DO, string)
+            handleEvent(command.constructor.name, command, DO, string);
+        }
+
+        //Event Handling Logic
+        let listeners = [];
+
+        function handleEvent(name, params, method, description) {
+            listeners.filter(i => i.name == name).forEach(i => i.fn(params, method, description));
+        }
+
+
+        //Event Listeners
+
+        function updateButtons(command) {
+            for (let i = 0; i < 9; i++) {
+                document.getElementById("" + i).innerHTML = command.model.model[i];
+            }
+        }
+
+        function updateServer(command) {
+            // axios.get("http://localhost:5555/setModel/" + JSON.stringify(model.model))
+            //     .then(result => {
+            //         console.log(result.data);
+            //     })
+            //     .catch(err => {
+            //         console.error(err);
+            //     })
+            socket.emit("setModel", JSON.stringify(model.model));
+        }
+
+        function updateUndoRedo() {
+            let undoElement = document.getElementById("undo");
+            let redoElement = document.getElementById("redo");
+
+            undoElement.disabled = isEmpty(undoStack);
+            redoElement.disabled = isEmpty(redoStack);
+
+            if (isEmpty(undoStack))
+                undoElement.innerHTML = "Undo"
+            else
+                undoElement.innerHTML = "Undo: " + last(undoStack).undoString();
+
+            if (isEmpty(redoStack))
+                redoElement.innerHTML = "Redo"
+            else
+                redoElement.innerHTML = "Redo: " + last(redoStack).doString();
+        }
+
+        function updateLog(command, method, string) {
+            document.getElementById("log").innerHTML += `${string} (${method})\n`;
+        }
+
+
+        let model = new Model();
+
+        // axios.get("http://localhost:5555/getModel")
+        //     .then(result => {
+        //         model.model = result.data;
+        //         updateButtons({ model: model });
+        //     })
+        //     .catch(err => {
+        //         console.error(err)
+        //     })
+
+        updateUndoRedo();
+
+        function clicker(index) {
+            let turn = model.getTurn();
+            if (turn != BOARD_FULL) {
+                if (model.model[index] == BLANK) {
+                    let clickCommand = new ClickCommand(model, index, turn);
+                    doCommand(clickCommand)
+                }
+            }
+        }
+
+
+
+        listeners.push({ name: new ClickCommand().constructor.name, fn: updateButtons });
+        listeners.push({ name: new ClickCommand().constructor.name, fn: updateLog });
+        listeners.push({ name: new ClickCommand().constructor.name, fn: updateServer });
+
+        listeners.push({ name: "undoRedo", fn: updateUndoRedo });
+
+        let socket = io();
+
+        socket.emit("getModel","");
+
+        socket.on("model", function (msg) {
+            console.log(msg);
+            model.model = JSON.parse(msg);
+                 updateButtons({ model: model });
+
+        });
+
+
+
+
+    </script>
+
+</body>
+
+</html>
